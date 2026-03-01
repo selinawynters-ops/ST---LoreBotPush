@@ -1,0 +1,156 @@
+/* Push Bot UI styles */
+
+#pushbot_share.menu_button::before {
+  background: linear-gradient(135deg, #0d9488, #2dd4bf);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+#pushbot_bulk.menu_button::before {
+  background: linear-gradient(135deg, #ea580c, #fb923c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.pushbot-panel {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--SmartThemeBlurTintColor);
+  margin-top: 8px;
+}
+
+.pushbot-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pushbot-panel-title {
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.pushbot-dim {
+  opacity: 0.8;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.pushbot-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(255,255,255,0.1);
+}
+
+.pushbot-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.pushbot-modal {
+  width: min(720px, 96vw);
+  max-height: 85vh;
+  overflow: hidden;
+  background: var(--SmartThemeBodyColor, #111);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  padding: 14px;
+}
+
+.pushbot-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pushbot-title {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.pushbot-x {
+  margin-left: auto;
+  font-size: 22px;
+  line-height: 22px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  color: inherit;
+  cursor: pointer;
+}
+
+.pushbot-row {
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+
+.pushbot-row label {
+  font-weight: 600;
+}
+
+.pushbot-row input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: inherit;
+}
+
+.pushbot-scroll {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+}
+
+.pushbot-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px;
+  border-radius: 10px;
+}
+
+.pushbot-check:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.pushbot-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.pushbot-note {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+
+/* Status + dashboard */
+.pushbot-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;opacity:.9;border:1px solid var(--SmartThemeBorderColor);}
+.pushbot-pill.ok{border-color:rgba(16,185,129,.6);}
+.pushbot-pill.bad{border-color:rgba(239,68,68,.6);}
+.pushbot-stats{margin-top:8px;padding:8px;border-radius:10px;border:1px solid var(--SmartThemeBorderColor);background:rgba(0,0,0,.08);font-size:12px;line-height:1.4;}
+.pushbot-panel-actions{gap:6px;align-items:center;}

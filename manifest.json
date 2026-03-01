@@ -1,0 +1,13 @@
+{
+  "name": "pushbot",
+  "display_name": "Push Bot - Character & Lorebook Push",
+  "description": "One-way admin/creator character + bound lorebook distribution for SillyTavern (requires included server plugin).",
+  "author": "selinawynters-ops",
+  "version": "1.3.0",
+  "loading_order": 50,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "homepage": "https://github.com/selinawynters-ops/Character_Lorebook-Push"
+}
