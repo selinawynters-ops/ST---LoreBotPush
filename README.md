@@ -1,7 +1,7 @@
 # ST LoreBot Push Patch Bundle 🚀
 
 This repository is a **delivery bundle repo** for DreamTavern/SillyTavern push-system updates.  
-It intentionally contains packaged ZIP artifacts, not a full server source tree.
+It intentionally contains packaged ZIP artifacts, not a full server source tree. It is also really important to understand that if you are not admin or do not have admin privileges, you CANNOT see anyone else but the admin to push your book to. 
 
 ## 📦 What's Inside
 
