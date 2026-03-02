@@ -17,7 +17,26 @@ import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction }
 import { deepMerge, humanizedDateTime, tryParse, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
-import { readWorldInfoFile } from './worldinfo.js';
+import { readWorldInfoFile, readPushManifest } from './worldinfo.js';
+
+// push namespace helper (mirrors worldinfo.js logic)
+function getPushNamespace() {
+    const cfg = getConfigValue('push.namespace', null);
+    if (cfg) return cfg;
+    try {
+        const pkgPath = path.join(process.cwd(), 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg && pkg.name) {
+                return pkg.name.replace(/\W+/g, '').toLowerCase();
+            }
+        }
+    } catch {}
+    return 'dreamtavern';
+}
+const PUSH_NS = getPushNamespace();
+const NS = suffix => `${PUSH_NS}_${suffix}`;
+
 import { invalidateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
@@ -25,6 +44,48 @@ import { getChatInfo } from './chats.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
+
+/**
+ * Fields in the "Advanced Definitions" section that are protected
+ * on pushed characters for non-creator / non-admin users.
+ */
+const ADVANCED_DEFINITION_FIELDS = [
+    'system_prompt',
+    'post_history_instructions',
+    'personality',
+    'scenario',
+    'depth_prompt_prompt',
+    'depth_prompt_depth',
+    'depth_prompt_role',
+    'talkativeness',
+    'mes_example',
+    'creator',
+    'creator_notes',
+    'character_version',
+    'tags',
+];
+
+/**
+ * Checks whether the current user is blocked from editing
+ * advanced definition fields on a pushed character.
+ * @param {string} avatarPath - Full path to the character PNG file
+ * @param {object} userProfile - request.user.profile
+ * @returns {Promise<boolean>} true = advanced fields are locked for this user
+ */
+async function isAdvancedLocked(avatarPath, userProfile) {
+    try {
+        const charDataStr = await readCharacterData(avatarPath);
+        if (!charDataStr) return false;
+        const charData = JSON.parse(charDataStr);
+        const ext = charData?.data?.extensions;
+        if (!ext?.[NS('pushed')]) return false;
+        if (userProfile?.admin) return false;
+        if (ext[NS('creator')] === userProfile?.handle) return false;
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -412,16 +473,16 @@ const processCharacter = async (item, directories, { shallow }) => {
         let jsonObject = getCharaCardV2(JSON.parse(imgData), directories, false);
         jsonObject.avatar = item;
         const character = jsonObject;
-        character.json_data = imgData;
+        character['json_data'] = imgData;
         const charStat = fs.statSync(path.join(directories.characters, item));
-        character.date_added = charStat.ctimeMs;
-        character.create_date = jsonObject.create_date || new Date(Math.round(charStat.ctimeMs)).toISOString();
+        character['date_added'] = charStat.ctimeMs;
+        character['create_date'] = jsonObject['create_date'] || new Date(Math.round(charStat.ctimeMs)).toISOString();
         const chatsDirectory = path.join(directories.chats, item.replace('.png', ''));
 
         const { chatSize, dateLastChat } = calculateChatSize(chatsDirectory);
-        character.chat_size = chatSize;
-        character.date_last_chat = dateLastChat;
-        character.data_size = calculateDataSize(jsonObject?.data);
+        character['chat_size'] = chatSize;
+        character['date_last_chat'] = dateLastChat;
+        character['data_size'] = calculateDataSize(jsonObject?.data);
         return shallow ? toShallow(character) : character;
     }
     catch (err) {
@@ -504,7 +565,7 @@ function unsetPrivateFields(char) {
 
 function readFromV2(char) {
     if (_.isUndefined(char.data)) {
-        console.warn(`Char ${char.name} has Spec v2 data missing`);
+        console.warn(`Char ${char['name']} has Spec v2 data missing`);
         return char;
     }
 
@@ -542,17 +603,17 @@ function readFromV2(char) {
                 //console.warn(`Spec v2 extension data missing for field: ${charField}, using default value: ${defaultValue}`);
                 char[charField] = defaultValue;
             } else {
-                console.warn(`Char ${char.name} has Spec v2 data missing for unknown field: ${charField}`);
+                console.warn(`Char ${char['name']} has Spec v2 data missing for unknown field: ${charField}`);
                 return;
             }
         }
         if (!_.isUndefined(char[charField]) && !_.isUndefined(v2Value) && String(char[charField]) !== String(v2Value)) {
-            console.warn(`Char ${char.name} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
+            console.warn(`Char ${char['name']} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
         }
         char[charField] = v2Value;
     });
 
-    char.chat = char.chat ?? `${char.name} - ${humanizedDateTime()}`;
+    char['chat'] = char['chat'] ?? `${char.name} - ${humanizedDateTime()}`;
 
     return char;
 }
@@ -626,6 +687,9 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.extensions.depth_prompt.depth', depth_value);
     _.set(char, 'data.extensions.depth_prompt.role', role_value);
 
+    // V3 fields
+    _.set(char, 'data.group_only_greetings', data.group_only_greetings ?? []);
+
     if (data.world) {
         try {
             const file = readWorldInfoFile(directories, data.world, false);
@@ -653,6 +717,14 @@ function charaFormatData(data, directories) {
         } catch {
             console.warn(`Failed to parse extensions JSON: ${data.extensions}`);
         }
+    }
+
+    // Tamper protection: re-assert push metadata from the original json_data
+    // so a crafted client request cannot strip the push flag / creator.
+    const origExt = tryParse(data.json_data)?.data?.extensions;
+    if (origExt?.[NS('pushed')]) {
+        _.set(char, `data.extensions.${NS('pushed')}`, true);
+        _.set(char, `data.extensions.${NS('creator')}`, origExt[NS('creator')]);
     }
 
     return char;
@@ -776,7 +848,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
     // Apply standard character transformations
     let processedCard = readFromV2(card);
     unsetPrivateFields(processedCard);
-    processedCard.create_date = new Date().toISOString();
+    processedCard['create_date'] = new Date().toISOString();
     processedCard.name = sanitize(processedCard.name);
 
     const fileName = preservedFileName || getPngName(processedCard.name, request.user.directories);
@@ -890,7 +962,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
-        jsonData.create_date = new Date().toISOString();
+        jsonData['create_date'] = new Date().toISOString();
         const pngName = preservedFileName || getPngName(jsonData.data?.name || jsonData.name, request.user.directories);
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
@@ -973,7 +1045,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
-        jsonData.create_date = new Date().toISOString();
+        jsonData['create_date'] = new Date().toISOString();
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
         fs.unlinkSync(uploadPath);
@@ -1008,6 +1080,38 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
     }
 
     return '';
+}
+
+/**
+ * Finds character PNG filenames that reference a given world info name.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} worldName Name of the world info file (without .json)
+ * @returns {Promise<string[]>} Array of character filenames (e.g. ["Koschei.png"])
+ */
+export async function findCharactersByWorld(directories, worldName) {
+    if (!worldName) return [];
+    const charDir = directories.characters;
+    if (!fs.existsSync(charDir)) return [];
+
+    const pngFiles = fs.readdirSync(charDir).filter(f => f.endsWith('.png'));
+    const matches = [];
+
+    for (const file of pngFiles) {
+        try {
+            const filePath = path.join(charDir, file);
+            const rawData = await readCharacterData(filePath, 'png');
+            if (!rawData) continue;
+            const charData = JSON.parse(rawData);
+            const charWorld = charData?.data?.extensions?.world || '';
+            if (charWorld === worldName) {
+                matches.push(file);
+            }
+        } catch {
+            // Skip unreadable files
+        }
+    }
+
+    return matches;
 }
 
 export const router = express.Router();
@@ -1107,6 +1211,36 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
     char = JSON.stringify(char);
     let targetFile = (request.body.avatar_url).replace('.png', '');
 
+    // Guard: if this is a pushed character and the user is not admin/creator,
+    // silently restore all advanced-definition fields from the original PNG.
+    try {
+        const guardPath = path.join(request.user.directories.characters, request.body.avatar_url);
+        if (await isAdvancedLocked(guardPath, request.user.profile)) {
+            const existingStr = await readCharacterData(guardPath);
+            if (existingStr) {
+                const existing = JSON.parse(existingStr);
+                const charObj = JSON.parse(char);
+                for (const field of ADVANCED_DEFINITION_FIELDS) {
+                    if (existing[field] !== undefined) charObj[field] = existing[field];
+                    if (existing.data?.[field] !== undefined) {
+                        if (!charObj.data) charObj.data = {};
+                        charObj.data[field] = existing.data[field];
+                    }
+                }
+                // Restore depth_prompt and talkativeness extensions
+                if (existing.data?.extensions?.depth_prompt) {
+                    _.set(charObj, 'data.extensions.depth_prompt', existing.data.extensions.depth_prompt);
+                }
+                if (existing.data?.extensions?.talkativeness !== undefined) {
+                    _.set(charObj, 'data.extensions.talkativeness', existing.data.extensions.talkativeness);
+                }
+                char = JSON.stringify(charObj);
+            }
+        }
+    } catch (lockErr) {
+        console.warn('[Characters] Advanced-lock guard error (continuing):', lockErr.message);
+    }
+
     try {
         if (!request.file) {
             const avatarPath = path.join(request.user.directories.characters, request.body.avatar_url);
@@ -1121,6 +1255,74 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             // Bust cache to reload the new avatar
             cacheBuster.bust(request, response);
         }
+
+        // ── One-way character sync (fire-and-forget) ──
+        // If this creator has previously pushed this character, propagate
+        // the edit to every recipient who still has the file.
+        const avatarFilename = request.body.avatar_url;
+        const syncCreatorHandle = request.user.profile.handle;
+        setImmediate(() => {
+            try {
+                const manifest = readPushManifest(syncCreatorHandle);
+                const records = manifest.filter(r =>
+                    Array.isArray(r.character_files) && r.character_files.includes(avatarFilename),
+                );
+                if (records.length === 0) return;
+
+                // Read the creator's just-saved character data
+                const creatorCharPath = path.join(request.user.directories.characters, avatarFilename);
+                if (!fs.existsSync(creatorCharPath)) return;
+                const creatorPngBuf = fs.readFileSync(creatorCharPath);
+                const creatorDataStr = read(creatorPngBuf);
+                if (!creatorDataStr) return;
+                const creatorData = JSON.parse(creatorDataStr);
+
+                // Collect unique recipients across all matching records
+                const allRecipients = new Set();
+                for (const r of records) for (const h of r.recipients) allRecipients.add(h);
+
+                for (const recipient of allRecipients) {
+                    try {
+                        const recipDirs = getUserDirectories(recipient);
+                        const destPath = path.join(recipDirs.characters, avatarFilename);
+                        if (!fs.existsSync(destPath)) continue; // user deleted it
+
+                        // Read recipient's current PNG to preserve their world reference
+                        const recipBuf = fs.readFileSync(destPath);
+                        const recipDataStr = read(recipBuf);
+                        const recipData = recipDataStr ? JSON.parse(recipDataStr) : {};
+                        const recipWorld = recipData?.data?.extensions?.world || '';
+
+                        // Clone creator data and restore recipient-specific fields
+                        const synced = JSON.parse(JSON.stringify(creatorData));
+                        if (!synced.data) synced.data = {};
+                        if (!synced.data.extensions) synced.data.extensions = {};
+                        synced.data.extensions.world = recipWorld;
+                        synced.data.extensions[NS('pushed')] = true;
+                        synced.data.extensions[NS('creator')] = syncCreatorHandle;
+
+                        // Write updated JSON into the RECIPIENT's existing PNG,
+                        // preserving their avatar image (they may have customised it).
+                        const updatedPng = write(recipBuf, JSON.stringify(synced));
+                        fs.writeFileSync(destPath, updatedPng);
+
+                        // Invalidate caches for this recipient
+                        for (const key of memoryCache.keys()) {
+                            if (key.startsWith(destPath)) {
+                                memoryCache.delete(key);
+                                break;
+                            }
+                        }
+                        if (useDiskCache) diskCache.syncQueue.add(recipient);
+                    } catch (e) {
+                        console.warn(`[Sync] Character sync to ${recipient} failed:`, e.message);
+                    }
+                }
+                console.log(`[Sync] Character "${avatarFilename}" synced to ${allRecipients.size} recipient(s)`);
+            } catch (err) {
+                console.warn('[Sync] Character sync error:', err.message);
+            }
+        });
 
         return response.sendStatus(200);
     } catch (err) {
@@ -1199,6 +1401,14 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
 
     try {
         const avatarPath = path.join(request.user.directories.characters, request.body.avatar_url);
+
+        // Guard: block advanced-field edits on pushed characters for non-authorized users
+        if (ADVANCED_DEFINITION_FIELDS.includes(request.body.field)) {
+            if (await isAdvancedLocked(avatarPath, request.user.profile)) {
+                return response.status(403).send('Advanced definitions are locked on this pushed character.');
+            }
+        }
+
         const charJSON = await readCharacterData(avatarPath);
         if (typeof charJSON !== 'string') throw new Error('Failed to read character file');
 
@@ -1248,6 +1458,16 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
 
         _.unset(update, 'json_data');
         _.unset(character, 'json_data');
+
+        // Guard: strip advanced-definition fields from the update if pushed-locked
+        if (await isAdvancedLocked(avatarPath, request.user.profile)) {
+            for (const field of ADVANCED_DEFINITION_FIELDS) {
+                _.unset(update, field);
+                _.unset(update, `data.${field}`);
+            }
+            _.unset(update, 'data.extensions.depth_prompt');
+            _.unset(update, 'data.extensions.talkativeness');
+        }
 
         character = deepMerge(character, update);
 

@@ -8,6 +8,7 @@ import { isMobile } from './RossAscends-mods.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
 import { getTokenCountAsync } from './tokenizers.js';
 import { power_user } from './power-user.js';
+import { isAdmin, getCurrentUserHandle } from './user.js';
 import { getTagKeyForEntity } from './tags.js';
 import { debounce_timeout, GENERATION_TYPE_TRIGGERS } from './constants.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
@@ -2568,6 +2569,137 @@ async function displayWorldEntries(name, data, navigation = navigation_option.no
             } else {
                 await hideWorldEditor();
             }
+        }
+    });
+
+    // Push to users button
+    $('#world_popup_share').show().off('click').on('click', async () => {
+        if (!name) return;
+
+        const userIsAdmin = isAdmin();
+        let users = [];
+        let linkedChars = [];
+
+        try {
+            const userListUrl = userIsAdmin ? '/api/users/get' : '/api/worldinfo/admin-handles';
+            const [usersRes, charsRes] = await Promise.all([
+                fetch(userListUrl, { method: 'POST', headers: getRequestHeaders() }),
+                fetch('/api/worldinfo/find-characters', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name }) }),
+            ]);
+
+            if (usersRes.ok) users = (await usersRes.json()).filter(u => u.enabled);
+            if (charsRes.ok) linkedChars = (await charsRes.json()).characters || [];
+        } catch {
+            // no-op
+        }
+
+        const userCheckboxes = users.map(u => {
+            const isSelf = u.handle === getCurrentUserHandle();
+            return `
+                <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; border-radius:4px;" class="push_user_row">
+                    <input type="checkbox" class="push_user_cb" value="${u.handle}" ${isSelf ? 'disabled' : ''}>
+                    <span>${u.name} <span style="opacity:0.5;">(${u.handle})</span></span>
+                    ${u.admin ? '<span style="font-size:0.75em; opacity:0.5; margin-left:auto;">admin</span>' : ''}
+                    ${isSelf ? '<span style="font-size:0.75em; opacity:0.5; margin-left:auto;">you</span>' : ''}
+                </label>
+            `;
+        }).join('');
+
+        const charListHtml = linkedChars.length > 0
+            ? `<div style="margin-bottom:12px; padding:8px; background:var(--SmartThemeBlurTintColor); border-radius:6px;">
+                <div style="font-weight:bold; margin-bottom:4px;">Linked character(s):</div>
+                ${linkedChars.map(c => `<div style="padding:2px 0;">${c.replace('.png', '')}</div>`).join('')}
+                <div style="font-size:0.85em; opacity:0.6; margin-top:4px;">These linked characters will be pushed too.</div>
+            </div>`
+            : '<div style="margin-bottom:8px; padding:6px; opacity:0.5; font-size:0.9em;">No linked characters found.</div>';
+
+        const defaultCharLabel = linkedChars.length > 0 ? linkedChars[0].replace('.png', '') : name;
+        const pushTitle = userIsAdmin ? `Push "${name}"` : `Push "${name}" to Admin`;
+        const pushNote = userIsAdmin
+            ? 'Lorebook will be hidden and locked for non-admin users.'
+            : 'Lorebook will be hidden and locked. Only you and admins can edit it.';
+        const namePrefix = userIsAdmin ? 'ADMIN-' : `dd-${getCurrentUserHandle()}-`;
+        const namePreviewDefault = `${namePrefix}${defaultCharLabel}`;
+
+        const popupHtml = `
+            <div style="min-width: 380px;">
+                <h3 style="margin-top:0;">${pushTitle}</h3>
+                ${charListHtml}
+
+                <div style="margin-bottom:12px;">
+                    <label style="display:block; font-weight:bold; margin-bottom:4px;">${userIsAdmin ? 'Book name:' : 'Character name:'}</label>
+                    <input type="text" id="push_char_label" class="text_pole" value="${defaultCharLabel}" style="width:100%; box-sizing:border-box;">
+                    <small style="opacity:0.5;">Lorebook name: <span id="push_name_preview">${namePreviewDefault}</span></small>
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; font-weight:bold;">
+                        <input type="checkbox" id="push_select_all">
+                        Select All
+                    </label>
+                </div>
+
+                <div style="max-height:200px; overflow-y:auto; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; padding:4px;">
+                    ${userCheckboxes}
+                </div>
+
+                <div style="margin-top:8px; padding:6px 8px; background:var(--SmartThemeBlurTintColor); border-radius:4px; font-size:0.85em;">
+                    ${pushNote}
+                </div>
+            </div>
+        `;
+
+        const popup = new Popup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Push', cancelButton: 'Cancel' });
+        const resultPromise = popup.show();
+
+        $(popup.dlg).on('change', '#push_select_all', function () {
+            const checked = $(this).prop('checked');
+            $(popup.dlg).find('.push_user_cb:not(:disabled)').prop('checked', checked);
+        });
+
+        $(popup.dlg).on('input', '#push_char_label', function () {
+            const val = $(this).val() || '???';
+            $(popup.dlg).find('#push_name_preview').text(`${namePrefix}${val}`);
+        });
+
+        let selectedHandles = [];
+        let charLabel = '';
+        $(popup.dlg).on('click', '.popup-button-ok', function () {
+            $(popup.dlg).find('.push_user_cb:checked').each(function () {
+                selectedHandles.push($(this).val());
+            });
+            charLabel = $(popup.dlg).find('#push_char_label').val().trim();
+        });
+
+        const result = await resultPromise;
+        if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+
+        if (selectedHandles.length === 0) {
+            toastr.warning('No users selected', 'Push');
+            return;
+        }
+        if (!charLabel) {
+            toastr.warning('Character label is required', 'Push');
+            return;
+        }
+
+        const pushResult = await fetch('/api/worldinfo/push', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ name, targets: selectedHandles, charLabel }),
+        });
+
+        if (pushResult.ok) {
+            const pushData = await pushResult.json();
+            const msg = [];
+            if (pushData.pushed.length) msg.push(`Lorebook to ${pushData.pushed.length} new user(s)`);
+            if (pushData.updated?.length) msg.push(`${pushData.updated.length} updated`);
+            if (pushData.characters_pushed.length) msg.push(`${linkedChars.length} character(s) pushed`);
+            if (pushData.failed.length) msg.push(`${pushData.failed.length} failed`);
+            toastr.success(msg.join('. '), `"${name}" Pushed`);
+        } else {
+            const errText = await pushResult.text();
+            toastr.error(errText || 'Failed to push', 'Error');
         }
     });
 
@@ -6002,6 +6134,176 @@ export function initWorldInfo() {
 
         if (finalName) {
             await createNewWorldInfo(finalName, { interactive: true });
+        }
+    });
+
+    // Bulk push button (admin only)
+    $('#world_bulk_push').toggle(isAdmin());
+    $('#world_bulk_push').on('click', async () => {
+        const charList = (characters || [])
+            .filter(c => c?.data?.extensions?.world)
+            .map(c => ({ name: c.name, avatar: c.avatar, world: c.data.extensions.world }));
+
+        if (charList.length === 0) {
+            toastr.info('No characters with embedded lorebooks found.', 'Bulk Push');
+            return;
+        }
+
+        let users = [];
+        try {
+            const usersRes = await fetch('/api/users/get', { method: 'POST', headers: getRequestHeaders() });
+            if (usersRes.ok) users = (await usersRes.json()).filter(u => u.enabled);
+        } catch {
+            // no-op
+        }
+
+        const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const myHandle = getCurrentUserHandle();
+
+        const charCheckboxes = charList.map((c, i) => `
+            <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; border-radius:4px;" class="bulk_char_row">
+                <input type="checkbox" class="bulk_char_cb" data-world="${esc(c.world)}" data-idx="${i}">
+                <span style="font-weight:bold;">${esc(c.name)}</span>
+                <span style="opacity:0.5; font-size:0.85em; margin-left:auto;">${esc(c.world)}</span>
+            </label>
+        `).join('');
+
+        const userCheckboxes = users.map(u => {
+            const isSelf = u.handle === myHandle;
+            return `
+                <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; border-radius:4px;" class="bulk_user_row">
+                    <input type="checkbox" class="bulk_user_cb" value="${esc(u.handle)}" ${isSelf ? 'disabled' : ''}>
+                    <span>${esc(u.name)} <span style="opacity:0.5;">(${esc(u.handle)})</span></span>
+                    ${u.admin ? '<span style="font-size:0.75em; opacity:0.5; margin-left:auto;">admin</span>' : ''}
+                    ${isSelf ? '<span style="font-size:0.75em; opacity:0.5; margin-left:auto;">you</span>' : ''}
+                </label>
+            `;
+        }).join('');
+
+        const popupHtml = `
+            <div style="min-width:420px;">
+                <h3 style="margin-top:0;">Bulk Push Characters</h3>
+                <p style="margin:0 0 8px; opacity:0.7;">Select 1-10 lorebook-linked characters, then choose users.</p>
+                <div style="font-weight:bold; margin-bottom:4px;">Characters:</div>
+                <div style="margin-bottom:8px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; font-weight:bold;">
+                        <input type="checkbox" id="bulk_char_select_all">
+                        Select All Characters
+                    </label>
+                </div>
+                <div id="bulk_char_list" style="max-height:200px; overflow-y:auto; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; padding:4px;">
+                    ${charCheckboxes}
+                </div>
+                <div style="margin-top:4px; margin-bottom:12px;">
+                    <span id="bulk_count_label" style="font-size:0.85em; opacity:0.6;">0 / 10 selected</span>
+                </div>
+
+                <div style="font-weight:bold; margin-bottom:4px;">Push to:</div>
+                <div style="margin-bottom:8px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; font-weight:bold;">
+                        <input type="checkbox" id="bulk_user_select_all">
+                        Select All Users
+                    </label>
+                </div>
+                <div id="bulk_user_list" style="max-height:200px; overflow-y:auto; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; padding:4px;">
+                    ${userCheckboxes}
+                </div>
+            </div>
+        `;
+
+        const popup = new Popup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Push', cancelButton: 'Cancel' });
+        const resultPromise = popup.show();
+
+        function refreshBulkState() {
+            const charChecked = $(popup.dlg).find('.bulk_char_cb:checked').length;
+            const userChecked = $(popup.dlg).find('.bulk_user_cb:checked').length;
+            $(popup.dlg).find('#bulk_count_label').text(`${charChecked} / 10 selected`);
+            if (charChecked >= 10) {
+                $(popup.dlg).find('.bulk_char_cb:not(:checked)').prop('disabled', true);
+            } else {
+                $(popup.dlg).find('.bulk_char_cb').prop('disabled', false);
+            }
+            if (charChecked > 0 && userChecked > 0) {
+                $(popup.dlg).find('.popup-button-ok').text(`Push ${charChecked} -> ${userChecked} user${userChecked !== 1 ? 's' : ''}`);
+            } else {
+                $(popup.dlg).find('.popup-button-ok').text('Push');
+            }
+        }
+
+        $(popup.dlg).on('change', '.bulk_char_cb', refreshBulkState);
+        $(popup.dlg).on('change', '.bulk_user_cb', refreshBulkState);
+        $(popup.dlg).on('change', '#bulk_char_select_all', function () {
+            const isChecked = $(this).prop('checked');
+            $(popup.dlg).find('.bulk_char_cb').each(function (i) {
+                if (isChecked && i >= 10) {
+                    $(this).prop('checked', false);
+                } else {
+                    $(this).prop('checked', isChecked);
+                }
+            });
+            refreshBulkState();
+        });
+        $(popup.dlg).on('change', '#bulk_user_select_all', function () {
+            const isChecked = $(this).prop('checked');
+            $(popup.dlg).find('.bulk_user_cb:not(:disabled)').prop('checked', isChecked);
+            refreshBulkState();
+        });
+
+        let selectedWorlds = [];
+        let selectedUsers = [];
+        $(popup.dlg).on('click', '.popup-button-ok', function () {
+            $(popup.dlg).find('.bulk_char_cb:checked').each(function () {
+                selectedWorlds.push($(this).data('world'));
+            });
+            $(popup.dlg).find('.bulk_user_cb:checked').each(function () {
+                selectedUsers.push($(this).val());
+            });
+        });
+
+        const result = await resultPromise;
+        if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+
+        if (selectedWorlds.length === 0) {
+            toastr.warning('No characters selected', 'Bulk Push');
+            return;
+        }
+        if (selectedWorlds.length > 10) {
+            toastr.warning('Maximum 10 characters allowed', 'Bulk Push');
+            return;
+        }
+        if (selectedUsers.length === 0) {
+            toastr.warning('No users selected', 'Bulk Push');
+            return;
+        }
+
+        const uniqueLorebooks = [...new Set(selectedWorlds)];
+        toastr.info(`Pushing ${uniqueLorebooks.length} lorebook(s) and characters to ${selectedUsers.length} user(s)...`, 'Bulk Push');
+
+        try {
+            const pushRes = await fetch('/api/worldinfo/bulk-push', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ lorebooks: uniqueLorebooks, targets: selectedUsers }),
+            });
+
+            if (pushRes.ok) {
+                const { results: bulkResults } = await pushRes.json();
+                const msgs = [];
+                for (const r of bulkResults) {
+                    const parts = [];
+                    if (r.pushed.length) parts.push(`${r.pushed.length} new`);
+                    if (r.updated?.length) parts.push(`${r.updated.length} updated`);
+                    if (r.characters_pushed.length) parts.push(`${r.characters_pushed.length} char(s)`);
+                    if (r.failed.length) parts.push(`${r.failed.length} failed`);
+                    msgs.push(`<b>${r.lorebook}</b>: ${parts.join(', ') || 'no targets'}`);
+                }
+                toastr.success(msgs.join('<br>'), 'Bulk Push Complete', { timeOut: 8000, escapeHtml: false });
+            } else {
+                const errText = await pushRes.text();
+                toastr.error(errText || 'Bulk push failed', 'Error');
+            }
+        } catch (err) {
+            toastr.error(String(err), 'Bulk Push Error');
         }
     });
 
