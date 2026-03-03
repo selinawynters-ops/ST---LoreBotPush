@@ -45,6 +45,8 @@ Core behavior delivered by these packages:
 Special rule included:
 
 - If a user-pushed `dd-*` lorebook is later re-pushed by admin, it keeps creator lineage and hidden/locked behavior.
+
+# Style 1 
  
 ![brave_F48EPcfLAm](https://github.com/user-attachments/assets/a91c0356-adaf-4e0c-9991-7ad20c19f16c)
 ![brave_ZyB5pczdjE](https://github.com/user-attachments/assets/5ec4363c-90b6-4d3a-b5da-014639ee1198)
